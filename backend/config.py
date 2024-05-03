@@ -501,7 +501,14 @@ ENABLE_RAG_HYBRID_SEARCH = (
     os.environ.get("ENABLE_RAG_HYBRID_SEARCH", "").lower() == "true"
 )
 
+RAG_EMBEDDING_ENGINE = os.environ.get("RAG_EMBEDDING_ENGINE", "")
+
 PDF_EXTRACT_IMAGES = os.environ.get("PDF_EXTRACT_IMAGES", "False").lower() == "true"
+
+RAG_EMBEDDING_MODEL = os.environ.get(
+    "RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+)
+log.info(f"Embedding model set: {RAG_EMBEDDING_MODEL}"),
 
 RAG_EMBEDDING_MODEL_AUTO_UPDATE = (
     os.environ.get("RAG_EMBEDDING_MODEL_AUTO_UPDATE", "").lower() == "true"
