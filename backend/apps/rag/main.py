@@ -18,8 +18,6 @@ import requests
 from pathlib import Path
 from typing import List
 
-from chromadb.utils.batch_utils import create_batches
-
 from langchain_community.document_loaders import (
     WebBaseLoader,
     TextLoader,
@@ -101,6 +99,7 @@ from config import (
     HEADERS,
     NEXTCLOUD_URL,
     ENABLE_LOCAL_WEB_FETCH,
+    LOCAL_DIR
 )
 
 from constants import ERROR_MESSAGES
@@ -714,24 +713,39 @@ def store_doc(
     file: UploadFile = File(...),
     user=Depends(get_current_user),
 ):
+    # "https://www.gutenberg.org/files/1727/1727-h/1727-h.htm"
+
     log.info(f"file.content_type: {file.content_type}")
     try:
         unsanitized_filename = file.filename
         filename = os.path.basename(unsanitized_filename)
+
+        file_path = f"{LOCAL_DIR}/uploads/{filename}"
+        file_nc_path = f"{UPLOAD_DIR}/{filename}"
+
         contents = file.file.read()
-        
-        # Create a temporary file to write the contents
-        local_file_path = "test.txt"  # Set the path to your local file
-        with open(local_file_path, "wb") as local_file:
-            local_file.write(contents)
-            local_file.close()
-            
-        f = open(local_file_path, "rb")
+        with open(file_path, "wb") as f:
+            f.write(contents)
+            f.close()
+
+        f = open(file_path, "rb")
         if collection_name == None:
             collection_name = calculate_sha256(f)[:63]
         f.close()
         
-        loader, known_type = get_loader(file.filename, file.content_type, local_file_path)
+        with open(file_path, "rb") as f:
+            response = requests.request("PROPFIND", file_nc_path, auth=(NEXTCLOUD_USERNAME, NEXTCLOUD_PASSWORD), headers=HEADERS)
+            if not (200 <= response.status_code <= 299):
+                response = requests.put(file_nc_path, data=f, auth=(NEXTCLOUD_USERNAME, NEXTCLOUD_PASSWORD), headers=HEADERS)
+                if 200 <= response.status_code <= 299:
+                    print("File uploaded successfully.")
+                else:
+                    print(f"Failed to upload file. Status code: {response.status_code}")
+            else:
+                print("File already exists.")
+        f.close()
+        
+        loader, known_type = get_loader(filename, file.content_type, file_path)
         data = loader.load()
 
         try:
@@ -744,7 +758,6 @@ def store_doc(
                     "filename": filename,
                     "known_type": known_type,
                 }
-            os.remove(local_file_path)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -755,14 +768,13 @@ def store_doc(
         if "No pandoc was found" in str(e):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Pandoc not installed",
+                detail=ERROR_MESSAGES.PANDOC_NOT_INSTALLED,
             )
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unknown error",
-        )
-
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ERROR_MESSAGES.DEFAULT(e),
+            )
 
 
 class TextRAGForm(BaseModel):

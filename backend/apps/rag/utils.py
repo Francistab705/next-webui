@@ -4,6 +4,7 @@ import requests
 
 from typing import List
 import psycopg2
+from pgvector.psycopg2 import register_vector
 
 from apps.ollama.main import (
     generate_ollama_embeddings,
@@ -22,9 +23,9 @@ from langchain.retrievers import (
 from typing import Optional
 from config import SRC_LOG_LEVELS, POSTGRES_CONNECTION_STRING
 
+
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
-
 
 def query_doc(
     collection_name: str,
@@ -33,13 +34,27 @@ def query_doc(
     k: int,
 ):
     try:
-        collection = CHROMA_CLIENT.get_collection(name=collection_name)
+        # Connect to your PostgreSQL database
+        connection = psycopg2.connect(POSTGRES_CONNECTION_STRING)
+        cursor = connection.cursor()
+
+        # Register the vector type if you haven't already
+        register_vector(cursor, schema='public', table='your_table', column='embedding')
+
+        # Compute query embeddings using your embedding function
         query_embeddings = embedding_function(query)
 
-        result = collection.query(
-            query_embeddings=[query_embeddings],
-            n_results=k,
-        )
+        # Query for similar documents
+        cursor.execute(f"""
+            SELECT *, pg_vector_cosine({query_embeddings}, embedding) AS similarity
+            FROM your_table
+            ORDER BY similarity DESC
+            LIMIT {k}
+        """)
+        result = cursor.fetchall()
+
+        cursor.close()
+        connection.close()
 
         log.info(f"query_doc:result {result}")
         return result
@@ -56,8 +71,26 @@ def query_doc_with_hybrid_search(
     r: float,
 ):
     try:
-        collection = CHROMA_CLIENT.get_collection(name=collection_name)
-        documents = collection.get()  # get all documents
+        connection = psycopg2.connect(POSTGRES_CONNECTION_STRING)
+        cursor = connection.cursor()
+
+        # Register the vector type if you haven't already
+        register_vector(cursor, schema='public', table='your_table', column='embedding')
+
+        # Compute query embeddings using your embedding function
+        query_embeddings = embedding_function(query)
+
+        # Query for similar documents
+        cursor.execute(f"""
+            SELECT *, pg_vector_cosine({query_embeddings}, embedding) AS similarity
+            FROM your_table
+            ORDER BY similarity DESC
+            LIMIT {k}
+        """)
+        documents = cursor.fetchall()
+
+        cursor.close()
+        connection.close()
 
         bm25_retriever = BM25Retriever.from_texts(
             texts=documents.get("documents"),
@@ -65,14 +98,14 @@ def query_doc_with_hybrid_search(
         )
         bm25_retriever.k = k
 
-        chroma_retriever = ChromaRetriever(
+        pg_retriever = PGRetriever(
             collection=collection,
             embedding_function=embedding_function,
             top_n=k,
         )
 
         ensemble_retriever = EnsembleRetriever(
-            retrievers=[bm25_retriever, chroma_retriever], weights=[0.5, 0.5]
+            retrievers=[bm25_retriever, pg_retriever], weights=[0.5, 0.5]
         )
 
         compressor = RerankCompressor(
@@ -428,7 +461,7 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 
 
-class ChromaRetriever(BaseRetriever):
+class PGRetriever(BaseRetriever):
     collection: Any
     embedding_function: Any
     top_n: int
