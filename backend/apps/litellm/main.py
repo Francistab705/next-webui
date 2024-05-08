@@ -36,6 +36,10 @@ from config import (
     LOCAL_DIR
 )
 
+import warnings
+
+warnings.simplefilter("ignore")
+
 from litellm.utils import get_llm_provider
 
 import asyncio
