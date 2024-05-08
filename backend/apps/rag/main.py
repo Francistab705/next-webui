@@ -100,7 +100,7 @@ from config import (
     HEADERS,
     NEXTCLOUD_URL,
     ENABLE_RAG_LOCAL_WEB_FETCH,
-    LOCAL_DIR
+    LOCAL_DIR,
     YOUTUBE_LOADER_LANGUAGE,
 )
 
