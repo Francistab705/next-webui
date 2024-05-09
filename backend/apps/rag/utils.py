@@ -38,18 +38,18 @@ def query_doc(
         with psycopg2.connect(POSTGRES_CONNECTION_STRING) as connection:
             with connection.cursor() as cursor:
                 # Register the vector type if you haven't already
-                register_vector(cursor, schema='public', table='your_table', column='embedding')
-
+                register_vector(cursor)
+                collection_name 
                 # Compute query embeddings using your embedding function
                 query_embeddings = embedding_function(query)
 
                 # Query for similar documents
                 query_template = """
-                    SELECT *, pg_vector_cosine(%s, embedding) AS similarity
-                    FROM your_table
+                    SELECT *, pg_vector_cosine(%s) AS similarity
+                    FROM {}
                     ORDER BY similarity DESC
                     LIMIT %s
-                """
+                """.format(collection_name)
                 cursor.execute(query_template, (query_embeddings, k))
                 result = cursor.fetchall()
 
@@ -78,18 +78,19 @@ def query_doc_with_hybrid_search(
         with psycopg2.connect(POSTGRES_CONNECTION_STRING) as connection:
             with connection.cursor() as cursor:
                 # Register the vector type if you haven't already
-                register_vector(cursor, schema='public', table='your_table', column='embedding')
+                register_vector(cursor)
 
                 # Compute query embeddings using your embedding function
                 query_embeddings = embedding_function(query)
 
                 # Query for similar documents
-                cursor.execute(f"""
-                    SELECT *, pg_vector_cosine(%s, embedding) AS similarity
-                    FROM your_table
+                query_template = """
+                    SELECT *, pg_vector_cosine(%s) AS similarity
+                    FROM {}
                     ORDER BY similarity DESC
                     LIMIT %s
-                """, (query_embeddings, k))
+                """.format(collection_name)
+                cursor.execute(query_template, (query_embeddings, k))
                 documents = cursor.fetchall()
 
         # Initialize BM25Retriever
@@ -144,6 +145,7 @@ def query_doc_with_hybrid_search(
         # Handle other unexpected errors
         log.error(f"An unexpected error occurred: {e}")
         raise
+
 
 
 def merge_and_sort_query_results(query_results, k, reverse=False):
