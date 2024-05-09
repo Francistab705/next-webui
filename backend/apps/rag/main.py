@@ -652,7 +652,7 @@ def store_docs_in_vector_db(docs, collection_name, overwrite: bool = False) -> b
         # Create the pgvector extension
         # cur.execute('CREATE EXTENSION IF NOT EXISTS pgvector')
         register_vector(conn)
-
+        
         # Create a new table for the collection
         if overwrite:
             # If overwrite is True, delete the existing collection
@@ -669,18 +669,20 @@ def store_docs_in_vector_db(docs, collection_name, overwrite: bool = False) -> b
         # Insert documents into the collection table
         for doc in docs:
             doc_id = uuid.uuid1()
+            metadata_json = json.dumps(doc.metadata) if doc.metadata else '{}'  # Handling empty metadata
+            log.debug(f"Metadata JSON: {metadata_json}")  # Log the metadata before insertion
             cur.execute(f"""
                 INSERT INTO {collection_name} (id, text, metadata)
                 VALUES (%s, %s, %s)
-            """, (doc_id, doc.page_content, doc.metadata))
+            """, (doc_id, doc.page_content, metadata_json))
             conn.commit()
 
         # Close the PostgreSQL connection
         conn.close()
         return True
     except Exception as e:
-            print(f"An error occurred: {e}")
-            return False
+        log.error(f"An error occurred: {e}")
+        return False
 
 
 def get_loader(filename: str, file_content_type: str, file_path: str):
