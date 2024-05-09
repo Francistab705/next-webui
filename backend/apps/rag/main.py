@@ -644,9 +644,6 @@ def store_text_in_vector_db(
 def store_docs_in_vector_db(docs, collection_name, overwrite: bool = False) -> bool:
     log.info(f"store_docs_in_vector_db {docs} {collection_name}")
 
-    texts = [doc.page_content for doc in docs]
-    metadatas = [doc.metadata for doc in docs]
-
     try:
         # Establish a connection to the PostgreSQL database
         conn = psycopg2.connect(POSTGRES_CONNECTION_STRING)

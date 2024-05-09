@@ -35,31 +35,34 @@ def query_doc(
 ):
     try:
         # Connect to your PostgreSQL database
-        connection = psycopg2.connect(POSTGRES_CONNECTION_STRING)
-        cursor = connection.cursor()
+        with psycopg2.connect(POSTGRES_CONNECTION_STRING) as connection:
+            with connection.cursor() as cursor:
+                # Register the vector type if you haven't already
+                register_vector(cursor, schema='public', table='your_table', column='embedding')
 
-        # Register the vector type if you haven't already
-        register_vector(cursor, schema='public', table='your_table', column='embedding')
+                # Compute query embeddings using your embedding function
+                query_embeddings = embedding_function(query)
 
-        # Compute query embeddings using your embedding function
-        query_embeddings = embedding_function(query)
-
-        # Query for similar documents
-        cursor.execute(f"""
-            SELECT *, pg_vector_cosine({query_embeddings}, embedding) AS similarity
-            FROM your_table
-            ORDER BY similarity DESC
-            LIMIT {k}
-        """)
-        result = cursor.fetchall()
-
-        cursor.close()
-        connection.close()
+                # Query for similar documents
+                query_template = """
+                    SELECT *, pg_vector_cosine(%s, embedding) AS similarity
+                    FROM your_table
+                    ORDER BY similarity DESC
+                    LIMIT %s
+                """
+                cursor.execute(query_template, (query_embeddings, k))
+                result = cursor.fetchall()
 
         log.info(f"query_doc:result {result}")
         return result
+    except psycopg2.Error as e:
+        # Handle database errors
+        log.error(f"Database error: {e}")
+        raise
     except Exception as e:
-        raise e
+        # Handle other unexpected errors
+        log.error(f"An unexpected error occurred: {e}")
+        raise
 
 
 def query_doc_with_hybrid_search(
@@ -71,43 +74,44 @@ def query_doc_with_hybrid_search(
     r: float,
 ):
     try:
-        connection = psycopg2.connect(POSTGRES_CONNECTION_STRING)
-        cursor = connection.cursor()
+        # Connect to your PostgreSQL database
+        with psycopg2.connect(POSTGRES_CONNECTION_STRING) as connection:
+            with connection.cursor() as cursor:
+                # Register the vector type if you haven't already
+                register_vector(cursor, schema='public', table='your_table', column='embedding')
 
-        # Register the vector type if you haven't already
-        register_vector(cursor, schema='public', table='your_table', column='embedding')
+                # Compute query embeddings using your embedding function
+                query_embeddings = embedding_function(query)
 
-        # Compute query embeddings using your embedding function
-        query_embeddings = embedding_function(query)
+                # Query for similar documents
+                cursor.execute(f"""
+                    SELECT *, pg_vector_cosine(%s, embedding) AS similarity
+                    FROM your_table
+                    ORDER BY similarity DESC
+                    LIMIT %s
+                """, (query_embeddings, k))
+                documents = cursor.fetchall()
 
-        # Query for similar documents
-        cursor.execute(f"""
-            SELECT *, pg_vector_cosine({query_embeddings}, embedding) AS similarity
-            FROM your_table
-            ORDER BY similarity DESC
-            LIMIT {k}
-        """)
-        documents = cursor.fetchall()
-
-        cursor.close()
-        connection.close()
-
+        # Initialize BM25Retriever
         bm25_retriever = BM25Retriever.from_texts(
-            texts=documents.get("documents"),
-            metadatas=documents.get("metadatas"),
+            texts=[doc['text'] for doc in documents],
+            metadatas=[doc['metadata'] for doc in documents],
         )
         bm25_retriever.k = k
 
+        # Initialize PGRetriever
         pg_retriever = PGRetriever(
-            collection=collection,
+            collection=collection_name,
             embedding_function=embedding_function,
             top_n=k,
         )
 
+        # Initialize EnsembleRetriever
         ensemble_retriever = EnsembleRetriever(
             retrievers=[bm25_retriever, pg_retriever], weights=[0.5, 0.5]
         )
 
+        # Initialize RerankCompressor
         compressor = RerankCompressor(
             embedding_function=embedding_function,
             top_n=k,
@@ -115,11 +119,15 @@ def query_doc_with_hybrid_search(
             r_score=r,
         )
 
+        # Initialize ContextualCompressionRetriever
         compression_retriever = ContextualCompressionRetriever(
             base_compressor=compressor, base_retriever=ensemble_retriever
         )
 
+        # Invoke the retrieval process
         result = compression_retriever.invoke(query)
+
+        # Format the result
         result = {
             "distances": [[d.metadata.get("score") for d in result]],
             "documents": [[d.page_content for d in result]],
@@ -128,9 +136,14 @@ def query_doc_with_hybrid_search(
 
         log.info(f"query_doc_with_hybrid_search:result {result}")
         return result
+    except psycopg2.Error as e:
+        # Handle database errors
+        log.error(f"Database error: {e}")
+        raise
     except Exception as e:
-        log.exception(f"Error querying document in collection {collection_name}: {e}")
-        raise e
+        # Handle other unexpected errors
+        log.error(f"An unexpected error occurred: {e}")
+        raise
 
 
 def merge_and_sort_query_results(query_results, k, reverse=False):
