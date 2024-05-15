@@ -641,47 +641,52 @@ def store_text_in_vector_db(
     return store_docs_in_vector_db(docs, collection_name, overwrite)
 
 
-def store_docs_in_vector_db(docs, collection_name, overwrite: bool = False) -> bool:
+def store_docs_in_vector_db(docs: List, collection_name: str, overwrite: bool = False) -> bool:
     log.info(f"store_docs_in_vector_db {docs} {collection_name}")
 
+    texts = [doc.page_content for doc in docs]
+    metadatas = [doc.metadata for doc in docs]
+
     try:
-        # Establish a connection to the PostgreSQL database
-        conn = psycopg2.connect(POSTGRES_CONNECTION_STRING)
-        cur = conn.cursor()
+        # Connect to your PostgreSQL database
+        with psycopg2.connect(POSTGRES_CONNECTION_STRING) as connection:
+            with connection.cursor() as cursor:
+                # If overwrite flag is set, delete existing collection
+                if overwrite:
+                    cursor.execute("DROP TABLE IF EXISTS {};".format(collection_name))
 
-        # Create the pgvector extension
-        # cur.execute('CREATE EXTENSION IF NOT EXISTS pgvector')
-        register_vector(conn)
-        
-        # Create a new table for the collection
-        if overwrite:
-            # If overwrite is True, delete the existing collection
-            cur.execute(f"DROP TABLE IF EXISTS {collection_name} CASCADE")
-        cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS {collection_name} (
-                id UUID PRIMARY KEY,
-                text TEXT,
-                metadata JSONB
-            )
-        """)
-        conn.commit()
+                # Create a new table for the collection
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS {} (
+                        id UUID PRIMARY KEY,
+                        metadata JSONB,
+                        embedding NUMERIC[]
+                    );
+                """.format(collection_name))
 
-        # Insert documents into the collection table
-        for doc in docs:
-            doc_id = uuid.uuid1()
-            metadata_json = json.dumps(doc.metadata) if doc.metadata else '{}'  # Handling empty metadata
-            log.debug(f"Metadata JSON: {metadata_json}")  # Log the metadata before insertion
-            cur.execute(f"""
-                INSERT INTO {collection_name} (id, text, metadata)
-                VALUES (%s, %s, %s)
-            """, (doc_id, doc.page_content, metadata_json))
-            conn.commit()
+                # Get embedding function
+                embedding_func = get_embedding_function(
+                    app.state.RAG_EMBEDDING_ENGINE,
+                    app.state.RAG_EMBEDDING_MODEL,
+                    app.state.sentence_transformer_ef,
+                    app.state.OPENAI_API_KEY,
+                    app.state.OPENAI_API_BASE_URL,
+                )
 
-        # Close the PostgreSQL connection
-        conn.close()
+                # Embed texts
+                embedding_texts = [text.replace("\n", " ") for text in texts]
+                embeddings = embedding_func(embedding_texts)
+
+                # Insert documents into the database
+                for docs, metadata, embedding in zip(docs, metadatas, embeddings):
+                    cursor.execute("""
+                        INSERT INTO {} (id, metadata, embedding)
+                        VALUES (%s, %s, %s);
+                    """.format(collection_name), (str(uuid.uuid4()), json.dumps(metadata), embedding))
+
         return True
     except Exception as e:
-        log.error(f"An error occurred: {e}")
+        log.exception(e)
         return False
 
 
@@ -793,7 +798,7 @@ def store_doc(
 
         f = open(file_path, "rb")
         if collection_name == None:
-            collection_name = calculate_sha256(f)[:63]
+            collection_name = "col_" + calculate_sha256(f)[:63]
         f.close()
         
         with open(file_path, "rb") as f:

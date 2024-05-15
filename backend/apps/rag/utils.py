@@ -39,13 +39,11 @@ def query_doc(
             with connection.cursor() as cursor:
                 # Register the vector type if you haven't already
                 register_vector(cursor)
-                collection_name 
                 # Compute query embeddings using your embedding function
                 query_embeddings = embedding_function(query)
-
                 # Query for similar documents
                 query_template = """
-                    SELECT *, pg_vector_cosine(%s) AS similarity
+                    SELECT * pg_vector_cosine(%s) AS similarity
                     FROM {}
                     ORDER BY similarity DESC
                     LIMIT %s
@@ -85,7 +83,7 @@ def query_doc_with_hybrid_search(
 
                 # Query for similar documents
                 query_template = """
-                    SELECT *, pg_vector_cosine(%s) AS similarity
+                    SELECT * pg_vector_cosine(%s) AS similarity
                     FROM {}
                     ORDER BY similarity DESC
                     LIMIT %s
