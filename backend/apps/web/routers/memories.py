@@ -12,7 +12,7 @@ from apps.web.models.memories import Memories, MemoryModel
 from utils.utils import get_verified_user
 from constants import ERROR_MESSAGES
 
-from config import SRC_LOG_LEVELS, CHROMA_CLIENT
+from config import SRC_LOG_LEVELS
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
