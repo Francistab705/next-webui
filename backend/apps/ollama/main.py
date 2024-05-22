@@ -49,8 +49,8 @@ from config import (
     UPLOAD_DIR,
     HEADERS,
     NEXTCLOUD_USERNAME,
-    NEXTCLOUD_PASSWORD
-    AppConfig,
+    NEXTCLOUD_PASSWORD,
+    AppConfig
 )
 from utils.misc import calculate_sha256
 
