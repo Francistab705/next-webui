@@ -184,7 +184,11 @@ WEBUI_VERSION = os.environ.get("WEBUI_VERSION", "v1.0.0-alpha.100")
 LOCAL_DIR = str(Path(os.getcwd(),"../backend/data").resolve())
 FRONTEND_BUILD_DIR = str(Path(os.getenv("FRONTEND_BUILD_DIR", "../build")))
 
-
+try:
+    with open(f"{LOCAL_DIR}/config.json", "r") as f:
+        CONFIG_DATA = json.load(f)
+except:
+    CONFIG_DATA = {}
 
 ####################################
 # Config helpers
