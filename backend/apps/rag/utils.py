@@ -2,7 +2,7 @@ import os
 import logging
 import requests
 
-from typing import List
+from typing import List,Optional,Dict
 import psycopg2
 from pgvector.psycopg2 import register_vector
 
@@ -19,8 +19,6 @@ from langchain.retrievers import (
     ContextualCompressionRetriever,
     EnsembleRetriever,
 )
-
-from typing import Optional
 from config import SRC_LOG_LEVELS, POSTGRES_CONNECTION_STRING
 
 
@@ -37,21 +35,38 @@ def query_doc(
         # Connect to your PostgreSQL database
         with psycopg2.connect(POSTGRES_CONNECTION_STRING) as connection:
             with connection.cursor() as cursor:
-                # Register the vector type if you haven't already
-                register_vector(cursor)
                 # Compute query embeddings using your embedding function
-                query_embeddings = embedding_function(query)
-                # Query for similar documents
-                query_template = """
-                    SELECT * pg_vector_cosine(%s) AS similarity
-                    FROM {}
-                    ORDER BY similarity DESC
-                    LIMIT %s
-                """.format(collection_name)
-                cursor.execute(query_template, (query_embeddings, k))
-                result = cursor.fetchall()
+                query_embeddings = embedding_function([query])[0]
 
-        log.info(f"query_doc:result {result}")
+                # Convert the embeddings to a format suitable for PostgreSQL
+                query_embeddings_str = ','.join(map(str, query_embeddings))
+
+                # Query for similar documents
+                query_template = f"""
+                    SELECT id, text, metadata, embedding, 
+                           1 - (embedding <=> '[{query_embeddings_str}]'::vector) AS similarity
+                    FROM {collection_name}
+                    ORDER BY similarity DESC
+                    LIMIT %s;
+                """
+                cursor.execute(query_template, (k,))
+                rows = cursor.fetchall()
+
+        # Initialize the result dictionary
+        result = {
+            "distances": [],
+            "documents": [],
+            "metadatas": []
+        }
+
+        # Process the query results and populate the result dictionary
+        for row in rows:
+            id, text, metadata, embedding, similarity = row
+            result["distances"].append(similarity)
+            result["documents"].append(text)
+            result["metadatas"].append(metadata)
+
+        log.info(f"query_doc: result {result}")
         return result
     except psycopg2.Error as e:
         # Handle database errors
@@ -61,7 +76,6 @@ def query_doc(
         # Handle other unexpected errors
         log.error(f"An unexpected error occurred: {e}")
         raise
-
 
 def query_doc_with_hybrid_search(
     collection_name: str,
@@ -70,47 +84,49 @@ def query_doc_with_hybrid_search(
     k: int,
     reranking_function,
     r: float,
-):
+) -> Dict:
     try:
         # Connect to your PostgreSQL database
         with psycopg2.connect(POSTGRES_CONNECTION_STRING) as connection:
             with connection.cursor() as cursor:
-                # Register the vector type if you haven't already
-                register_vector(cursor)
-
                 # Compute query embeddings using your embedding function
-                query_embeddings = embedding_function(query)
+                query_embeddings = embedding_function([query])[0]
 
-                # Query for similar documents
-                query_template = """
-                    SELECT * pg_vector_cosine(%s) AS similarity
-                    FROM {}
+                # Convert the embeddings to a format suitable for PostgreSQL
+                query_embeddings_str = ','.join(map(str, query_embeddings))
+
+                # Query for similar documents using PGVector
+                query_template = f"""
+                    SELECT id, text, metadata, embedding, 
+                           1 - (embedding <=> '[{query_embeddings_str}]'::vector) AS similarity
+                    FROM {collection_name}
                     ORDER BY similarity DESC
-                    LIMIT %s
-                """.format(collection_name)
-                cursor.execute(query_template, (query_embeddings, k))
+                    LIMIT %s;
+                """
+                cursor.execute(query_template, (k,))
                 documents = cursor.fetchall()
 
-        # Initialize BM25Retriever
+        # Initialize BM25Retriever (assuming it is defined elsewhere in your code)
         bm25_retriever = BM25Retriever.from_texts(
-            texts=[doc['text'] for doc in documents],
-            metadatas=[doc['metadata'] for doc in documents],
+            texts=[doc[1] for doc in documents],  # doc[1] is text
+            metadatas=[doc[2] for doc in documents]  # doc[2] is metadata
         )
         bm25_retriever.k = k
 
-        # Initialize PGRetriever
+        # Initialize PGRetriever (assuming it is defined elsewhere in your code)
         pg_retriever = PGRetriever(
             collection=collection_name,
             embedding_function=embedding_function,
             top_n=k,
         )
 
-        # Initialize EnsembleRetriever
+        # Initialize EnsembleRetriever (assuming it is defined elsewhere in your code)
         ensemble_retriever = EnsembleRetriever(
-            retrievers=[bm25_retriever, pg_retriever], weights=[0.5, 0.5]
+            retrievers=[bm25_retriever, pg_retriever],
+            weights=[0.5, 0.5]
         )
 
-        # Initialize RerankCompressor
+        # Initialize RerankCompressor (assuming it is defined elsewhere in your code)
         compressor = RerankCompressor(
             embedding_function=embedding_function,
             top_n=k,
@@ -118,23 +134,24 @@ def query_doc_with_hybrid_search(
             r_score=r,
         )
 
-        # Initialize ContextualCompressionRetriever
+        # Initialize ContextualCompressionRetriever (assuming it is defined elsewhere in your code)
         compression_retriever = ContextualCompressionRetriever(
-            base_compressor=compressor, base_retriever=ensemble_retriever
+            base_compressor=compressor,
+            base_retriever=ensemble_retriever
         )
 
         # Invoke the retrieval process
         result = compression_retriever.invoke(query)
 
         # Format the result
-        result = {
+        formatted_result = {
             "distances": [[d.metadata.get("score") for d in result]],
             "documents": [[d.page_content for d in result]],
             "metadatas": [[d.metadata for d in result]],
         }
 
-        log.info(f"query_doc_with_hybrid_search:result {result}")
-        return result
+        log.info(f"query_doc_with_hybrid_search: result {formatted_result}")
+        return formatted_result
     except psycopg2.Error as e:
         # Handle database errors
         log.error(f"Database error: {e}")
@@ -143,8 +160,6 @@ def query_doc_with_hybrid_search(
         # Handle other unexpected errors
         log.error(f"An unexpected error occurred: {e}")
         raise
-
-
 
 def merge_and_sort_query_results(query_results, k, reverse=False):
     # Initialize lists to store combined data

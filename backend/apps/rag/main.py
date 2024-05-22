@@ -653,16 +653,17 @@ def store_docs_in_vector_db(docs: List, collection_name: str, overwrite: bool = 
             with connection.cursor() as cursor:
                 # If overwrite flag is set, delete existing collection
                 if overwrite:
-                    cursor.execute("DROP TABLE IF EXISTS {};".format(collection_name))
+                    cursor.execute(f"DROP TABLE IF EXISTS {collection_name};")
 
                 # Create a new table for the collection
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS {} (
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {collection_name} (
                         id UUID PRIMARY KEY,
+                        text TEXT,
                         metadata JSONB,
-                        embedding NUMERIC[]
+                        embedding VECTOR
                     );
-                """.format(collection_name))
+                """)
 
                 # Get embedding function
                 embedding_func = get_embedding_function(
@@ -678,11 +679,12 @@ def store_docs_in_vector_db(docs: List, collection_name: str, overwrite: bool = 
                 embeddings = embedding_func(embedding_texts)
 
                 # Insert documents into the database
-                for docs, metadata, embedding in zip(docs, metadatas, embeddings):
-                    cursor.execute("""
-                        INSERT INTO {} (id, metadata, embedding)
-                        VALUES (%s, %s, %s);
-                    """.format(collection_name), (str(uuid.uuid4()), json.dumps(metadata), embedding))
+                for text, metadata, embedding in zip(texts, metadatas, embeddings):
+                    embedding_str = ','.join(map(str, embedding))
+                    cursor.execute(f"""
+                        INSERT INTO {collection_name} (id, text, metadata, embedding)
+                        VALUES (%s, %s, %s, '[{embedding_str}]'::vector);
+                    """, (str(uuid.uuid4()), text, json.dumps(metadata)))
 
         return True
     except Exception as e:
