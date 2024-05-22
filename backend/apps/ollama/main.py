@@ -50,6 +50,7 @@ from config import (
     HEADERS,
     NEXTCLOUD_USERNAME,
     NEXTCLOUD_PASSWORD
+    AppConfig,
 )
 from utils.misc import calculate_sha256
 
@@ -65,11 +66,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.state.config = AppConfig()
 
-app.state.ENABLE_MODEL_FILTER = ENABLE_MODEL_FILTER
-app.state.MODEL_FILTER_LIST = MODEL_FILTER_LIST
+app.state.config.ENABLE_MODEL_FILTER = ENABLE_MODEL_FILTER
+app.state.config.MODEL_FILTER_LIST = MODEL_FILTER_LIST
 
-app.state.OLLAMA_BASE_URLS = OLLAMA_BASE_URLS
+app.state.config.OLLAMA_BASE_URLS = OLLAMA_BASE_URLS
 app.state.MODELS = {}
 
 
@@ -100,7 +102,7 @@ async def get_status():
 
 @app.get("/urls")
 async def get_ollama_api_urls(user=Depends(get_admin_user)):
-    return {"OLLAMA_BASE_URLS": app.state.OLLAMA_BASE_URLS}
+    return {"OLLAMA_BASE_URLS": app.state.config.OLLAMA_BASE_URLS}
 
 
 class UrlUpdateForm(BaseModel):
@@ -109,10 +111,10 @@ class UrlUpdateForm(BaseModel):
 
 @app.post("/urls/update")
 async def update_ollama_api_url(form_data: UrlUpdateForm, user=Depends(get_admin_user)):
-    app.state.OLLAMA_BASE_URLS = form_data.urls
+    app.state.config.OLLAMA_BASE_URLS = form_data.urls
 
-    log.info(f"app.state.OLLAMA_BASE_URLS: {app.state.OLLAMA_BASE_URLS}")
-    return {"OLLAMA_BASE_URLS": app.state.OLLAMA_BASE_URLS}
+    log.info(f"app.state.config.OLLAMA_BASE_URLS: {app.state.config.OLLAMA_BASE_URLS}")
+    return {"OLLAMA_BASE_URLS": app.state.config.OLLAMA_BASE_URLS}
 
 
 @app.get("/cancel/{request_id}")
@@ -126,8 +128,9 @@ async def cancel_ollama_request(request_id: str, user=Depends(get_current_user))
 
 
 async def fetch_url(url):
+    timeout = aiohttp.ClientTimeout(total=5)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 return await response.json()
     except Exception as e:
@@ -157,7 +160,7 @@ def merge_models_lists(model_lists):
 
 async def get_all_models():
     log.info("get_all_models()")
-    tasks = [fetch_url(f"{url}/api/tags") for url in app.state.OLLAMA_BASE_URLS]
+    tasks = [fetch_url(f"{url}/api/tags") for url in app.state.config.OLLAMA_BASE_URLS]
     responses = await asyncio.gather(*tasks)
 
     models = {
@@ -179,18 +182,19 @@ async def get_ollama_tags(
     if url_idx == None:
         models = await get_all_models()
 
-        if app.state.ENABLE_MODEL_FILTER:
+        if app.state.config.ENABLE_MODEL_FILTER:
             if user.role == "user":
                 models["models"] = list(
                     filter(
-                        lambda model: model["name"] in app.state.MODEL_FILTER_LIST,
+                        lambda model: model["name"]
+                        in app.state.config.MODEL_FILTER_LIST,
                         models["models"],
                     )
                 )
                 return models
         return models
     else:
-        url = app.state.OLLAMA_BASE_URLS[url_idx]
+        url = app.state.config.OLLAMA_BASE_URLS[url_idx]
         try:
             r = requests.request(method="GET", url=f"{url}/api/tags")
             r.raise_for_status()
@@ -220,7 +224,9 @@ async def get_ollama_versions(url_idx: Optional[int] = None):
     if url_idx == None:
 
         # returns lowest version
-        tasks = [fetch_url(f"{url}/api/version") for url in app.state.OLLAMA_BASE_URLS]
+        tasks = [
+            fetch_url(f"{url}/api/version") for url in app.state.config.OLLAMA_BASE_URLS
+        ]
         responses = await asyncio.gather(*tasks)
         responses = list(filter(lambda x: x is not None, responses))
 
@@ -239,7 +245,7 @@ async def get_ollama_versions(url_idx: Optional[int] = None):
                 detail=ERROR_MESSAGES.OLLAMA_NOT_FOUND,
             )
     else:
-        url = app.state.OLLAMA_BASE_URLS[url_idx]
+        url = app.state.config.OLLAMA_BASE_URLS[url_idx]
         try:
             r = requests.request(method="GET", url=f"{url}/api/version")
             r.raise_for_status()
@@ -271,7 +277,7 @@ class ModelNameForm(BaseModel):
 async def pull_model(
     form_data: ModelNameForm, url_idx: int = 0, user=Depends(get_admin_user)
 ):
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     r = None
@@ -359,7 +365,7 @@ async def push_model(
                 detail=ERROR_MESSAGES.MODEL_NOT_FOUND(form_data.name),
             )
 
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.debug(f"url: {url}")
 
     r = None
@@ -421,7 +427,7 @@ async def create_model(
     form_data: CreateModelForm, url_idx: int = 0, user=Depends(get_admin_user)
 ):
     log.debug(f"form_data: {form_data}")
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     r = None
@@ -494,7 +500,7 @@ async def copy_model(
                 detail=ERROR_MESSAGES.MODEL_NOT_FOUND(form_data.source),
             )
 
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     try:
@@ -541,7 +547,7 @@ async def delete_model(
                 detail=ERROR_MESSAGES.MODEL_NOT_FOUND(form_data.name),
             )
 
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     try:
@@ -581,7 +587,7 @@ async def show_model_info(form_data: ModelNameForm, user=Depends(get_verified_us
         )
 
     url_idx = random.choice(app.state.MODELS[form_data.name]["urls"])
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     try:
@@ -638,7 +644,7 @@ async def generate_embeddings(
                 detail=ERROR_MESSAGES.MODEL_NOT_FOUND(form_data.model),
             )
 
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     try:
@@ -688,7 +694,7 @@ def generate_ollama_embeddings(
                 detail=ERROR_MESSAGES.MODEL_NOT_FOUND(form_data.model),
             )
 
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     try:
@@ -757,7 +763,7 @@ async def generate_completion(
                 detail=ERROR_MESSAGES.MODEL_NOT_FOUND(form_data.model),
             )
 
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     r = None
@@ -860,7 +866,7 @@ async def generate_chat_completion(
                 detail=ERROR_MESSAGES.MODEL_NOT_FOUND(form_data.model),
             )
 
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     r = None
@@ -969,7 +975,7 @@ async def generate_openai_chat_completion(
                 detail=ERROR_MESSAGES.MODEL_NOT_FOUND(form_data.model),
             )
 
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
     log.info(f"url: {url}")
 
     r = None
@@ -1045,11 +1051,12 @@ async def get_openai_models(
     if url_idx == None:
         models = await get_all_models()
 
-        if app.state.ENABLE_MODEL_FILTER:
+        if app.state.config.ENABLE_MODEL_FILTER:
             if user.role == "user":
                 models["models"] = list(
                     filter(
-                        lambda model: model["name"] in app.state.MODEL_FILTER_LIST,
+                        lambda model: model["name"]
+                        in app.state.config.MODEL_FILTER_LIST,
                         models["models"],
                     )
                 )
@@ -1068,7 +1075,7 @@ async def get_openai_models(
         }
 
     else:
-        url = app.state.OLLAMA_BASE_URLS[url_idx]
+        url = app.state.config.OLLAMA_BASE_URLS[url_idx]
         try:
             r = requests.request(method="GET", url=f"{url}/api/tags")
             r.raise_for_status()
@@ -1202,7 +1209,7 @@ async def download_model(
 
     if url_idx is None:  # Explicit comparison for clarity
         url_idx = 0
-    url = app.state.OLLAMA_BASE_URLS[url_idx]
+    url = app.state.config.OLLAMA_BASE_URLS[url_idx]
 
     file_name = parse_huggingface_url(form_data.url)
 
@@ -1228,7 +1235,7 @@ async def download_model(
 def upload_model(file: UploadFile = File(...), url_idx: Optional[int] = None):
     if url_idx is None:
         url_idx = 0
-    ollama_url = app.state.OLLAMA_BASE_URLS[url_idx]
+    ollama_url = app.state.config.OLLAMA_BASE_URLS[url_idx]
 
     # Create a temporary file to save the uploaded content
     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
@@ -1292,7 +1299,7 @@ def upload_model(file: UploadFile = File(...), url_idx: Optional[int] = None):
 # async def upload_model(file: UploadFile = File(), url_idx: Optional[int] = None):
 #     if url_idx == None:
 #         url_idx = 0
-#     url = app.state.OLLAMA_BASE_URLS[url_idx]
+#     url = app.state.config.OLLAMA_BASE_URLS[url_idx]
 
 #     file_location = os.path.join(UPLOAD_DIR, file.filename)
 #     total_size = file.size
@@ -1329,7 +1336,7 @@ def upload_model(file: UploadFile = File(...), url_idx: Optional[int] = None):
 async def deprecated_proxy(
     path: str, request: Request, user=Depends(get_verified_user)
 ):
-    url = app.state.OLLAMA_BASE_URLS[0]
+    url = app.state.config.OLLAMA_BASE_URLS[0]
     target_url = f"{url}/{path}"
 
     body = await request.body()
