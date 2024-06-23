@@ -1,29 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
 import sha256 from 'js-sha256';
-import { getOllamaModels } from '$lib/apis/ollama';
-import { getOpenAIModels } from '$lib/apis/openai';
-import { getLiteLLMModels } from '$lib/apis/litellm';
-
-export const getModels = async (token: string) => {
-	let models = await Promise.all([
-		getOllamaModels(token).catch((error) => {
-			console.log(error);
-			return null;
-		}),
-		getOpenAIModels(token).catch((error) => {
-			console.log(error);
-			return null;
-		}),
-		getLiteLLMModels(token).catch((error) => {
-			console.log(error);
-			return null;
-		})
-	]);
-
-	models = models.filter((models) => models).reduce((a, e, i, arr) => a.concat(e), []);
-
-	return models;
-};
 
 //////////////////////////
 // Helper functions
@@ -36,11 +12,12 @@ export const sanitizeResponseContent = (content: string) => {
 		.replace(/<$/, '')
 		.replaceAll(/<\|[a-z]+\|>/g, ' ')
 		.replaceAll('<', '&lt;')
+		.replaceAll('>', '&gt;')
 		.trim();
 };
 
 export const revertSanitizedResponseContent = (content: string) => {
-	return content.replaceAll('&lt;', '<');
+	return content.replaceAll('&lt;', '<').replaceAll('&gt;', '>');
 };
 
 export const capitalizeFirstLetter = (string) => {
@@ -325,6 +302,29 @@ export const getImportOrigin = (_chats) => {
 	return 'webui';
 };
 
+export const getUserPosition = async (raw = false) => {
+	// Get the user's location using the Geolocation API
+	const position = await new Promise((resolve, reject) => {
+		navigator.geolocation.getCurrentPosition(resolve, reject);
+	}).catch((error) => {
+		console.error('Error getting user location:', error);
+		throw error;
+	});
+
+	if (!position) {
+		return 'Location not available';
+	}
+
+	// Extract the latitude and longitude from the position
+	const { latitude, longitude } = position.coords;
+
+	if (raw) {
+		return { latitude, longitude };
+	} else {
+		return `${latitude.toFixed(3)}, ${longitude.toFixed(3)} (lat, long)`;
+	}
+};
+
 const convertOpenAIMessages = (convo) => {
 	// Parse OpenAI chat messages and create chat dictionary for creating new chats
 	const mapping = convo['mapping'];
@@ -459,17 +459,85 @@ export const removeEmojis = (str) => {
 
 export const extractSentences = (text) => {
 	// Split the paragraph into sentences based on common punctuation marks
-	const sentences = text.split(/(?<=[.!?])/);
+	const sentences = text.split(/(?<=[.!?])\s+/);
 
 	return sentences
 		.map((sentence) => removeEmojis(sentence.trim()))
 		.filter((sentence) => sentence !== '');
 };
 
+export const extractSentencesForAudio = (text) => {
+	return extractSentences(text).reduce((mergedTexts, currentText) => {
+		const lastIndex = mergedTexts.length - 1;
+		if (lastIndex >= 0) {
+			const previousText = mergedTexts[lastIndex];
+			const wordCount = previousText.split(/\s+/).length;
+			if (wordCount < 2) {
+				mergedTexts[lastIndex] = previousText + ' ' + currentText;
+			} else {
+				mergedTexts.push(currentText);
+			}
+		} else {
+			mergedTexts.push(currentText);
+		}
+		return mergedTexts;
+	}, []);
+};
+
 export const blobToFile = (blob, fileName) => {
 	// Create a new File object from the Blob
 	const file = new File([blob], fileName, { type: blob.type });
 	return file;
+};
+
+/**
+ * @param {string} template - The template string containing placeholders.
+ * @returns {string} The template string with the placeholders replaced by the prompt.
+ */
+export const promptTemplate = (
+	template: string,
+	user_name?: string,
+	user_location?: string
+): string => {
+	// Get the current date
+	const currentDate = new Date();
+
+	// Format the date to YYYY-MM-DD
+	const formattedDate =
+		currentDate.getFullYear() +
+		'-' +
+		String(currentDate.getMonth() + 1).padStart(2, '0') +
+		'-' +
+		String(currentDate.getDate()).padStart(2, '0');
+
+	// Format the time to HH:MM:SS AM/PM
+	const currentTime = currentDate.toLocaleTimeString('en-US', {
+		hour: 'numeric',
+		minute: 'numeric',
+		second: 'numeric',
+		hour12: true
+	});
+
+	// Replace {{CURRENT_DATETIME}} in the template with the formatted datetime
+	template = template.replace('{{CURRENT_DATETIME}}', `${formattedDate} ${currentTime}`);
+
+	// Replace {{CURRENT_DATE}} in the template with the formatted date
+	template = template.replace('{{CURRENT_DATE}}', formattedDate);
+
+	// Replace {{CURRENT_TIME}} in the template with the formatted time
+	template = template.replace('{{CURRENT_TIME}}', currentTime);
+
+	if (user_name) {
+		// Replace {{USER_NAME}} in the template with the user's name
+		template = template.replace('{{USER_NAME}}', user_name);
+	}
+
+	if (user_location) {
+		// Replace {{USER_LOCATION}} in the template with the current location
+		template = template.replace('{{USER_LOCATION}}', user_location);
+	}
+
+	return template;
 };
 
 /**
@@ -484,8 +552,8 @@ export const blobToFile = (blob, fileName) => {
  * @param {string} prompt - The string to replace the placeholders with.
  * @returns {string} The template string with the placeholders replaced by the prompt.
  */
-export const promptTemplate = (template: string, prompt: string): string => {
-	return template.replace(
+export const titleGenerationTemplate = (template: string, prompt: string): string => {
+	template = template.replace(
 		/{{prompt}}|{{prompt:start:(\d+)}}|{{prompt:end:(\d+)}}|{{prompt:middletruncate:(\d+)}}/g,
 		(match, startLength, endLength, middleLength) => {
 			if (match === '{{prompt}}') {
@@ -505,6 +573,10 @@ export const promptTemplate = (template: string, prompt: string): string => {
 			return '';
 		}
 	);
+
+	template = promptTemplate(template);
+
+	return template;
 };
 
 export const approximateToHumanReadable = (nanoseconds: number) => {
